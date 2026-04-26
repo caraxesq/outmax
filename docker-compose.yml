@@ -1,0 +1,11 @@
+services:
+  outmax:
+    build: .
+    container_name: outmax
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./sessions:/app/sessions
+      - ./logs:/app/logs
