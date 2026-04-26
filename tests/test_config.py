@@ -8,6 +8,7 @@ from app.config import Settings
 
 def test_admin_ids_parse(settings):
     assert settings.admin_id_set == {1, 2}
+    assert settings.telegram_api_ready is True
 
 
 def test_invalid_delay_rejected(tmp_path):

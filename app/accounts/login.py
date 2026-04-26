@@ -75,6 +75,8 @@ class BotLoginManager:
     async def start(self, admin_id: int) -> str:
         if not self.enabled_for(admin_id):
             return "Bot login disabled. Set ENABLE_BOT_LOGIN=true and use an admin account."
+        if not self.settings.telegram_api_ready:
+            return "Telegram API credentials are missing. Set API_ID and API_HASH before adding user accounts."
         self.states[admin_id] = BotLoginState(session_name="")
         return "Send the phone number for the Telegram user account."
 
@@ -128,6 +130,8 @@ async def cli_login() -> None:
         raise RuntimeError("Telethon is not installed")
     settings = get_settings()
     settings.ensure_runtime_dirs()
+    if not settings.telegram_api_ready:
+        raise RuntimeError("API_ID and API_HASH are required for Telegram account login")
     sessionmaker = create_sessionmaker(settings=settings)
     phone = input("Telegram phone: ").strip()
     session_name = safe_session_name(phone)

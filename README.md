@@ -28,7 +28,7 @@ Fill `.env` before starting:
 
 - `BOT_TOKEN` from BotFather.
 - `ADMIN_IDS` as comma-separated Telegram numeric IDs.
-- `API_ID` and `API_HASH` from https://my.telegram.org.
+- `API_ID` and `API_HASH` from https://my.telegram.org. The control bot can start without these, but account login, sending, and reply listeners require them.
 
 ## Adding Accounts
 

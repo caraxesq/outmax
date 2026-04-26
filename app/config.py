@@ -58,6 +58,10 @@ class Settings(BaseSettings):
                 result.add(int(raw))
         return result
 
+    @property
+    def telegram_api_ready(self) -> bool:
+        return bool(self.api_id and self.api_hash)
+
     def ensure_runtime_dirs(self) -> None:
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)

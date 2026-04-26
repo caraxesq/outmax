@@ -29,8 +29,8 @@ async def main() -> None:
         raise RuntimeError("BOT_TOKEN is required")
     if not settings.admin_id_set:
         raise RuntimeError("ADMIN_IDS is required")
-    if not settings.api_id or not settings.api_hash:
-        raise RuntimeError("API_ID and API_HASH are required")
+    if not settings.telegram_api_ready:
+        logger.warning("API_ID/API_HASH are missing; starting control bot without Telegram user-account clients")
 
     await init_db()
     sessionmaker = create_sessionmaker(settings=settings)
@@ -52,8 +52,9 @@ async def main() -> None:
     dispatcher.include_router(build_router(runtime))
 
     reply_listener = ReplyListener(settings, sessionmaker, bot)
-    for account, client in await account_manager.start_authorized_clients():
-        reply_listener.attach(account.id, client)
+    if settings.telegram_api_ready:
+        for account, client in await account_manager.start_authorized_clients():
+            reply_listener.attach(account.id, client)
 
     worker = MessageWorker(settings, sessionmaker, account_manager)
     worker_task = asyncio.create_task(worker.start())
