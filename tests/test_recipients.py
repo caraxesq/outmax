@@ -16,3 +16,14 @@ async def test_import_csv_deduplicates_and_preserves_metadata(sessionmaker):
         recipients = list(await session.scalars(select(Recipient).order_by(Recipient.id)))
     assert recipients[0].metadata_json["name"] == "Alice"
     assert recipients[1].username == "bob"
+
+
+async def test_import_usernames_from_free_text(sessionmaker):
+    text = "@alice\nhttps://t.me/bob\ncarol, @alice"
+    result = await RecipientImporter(sessionmaker).import_usernames_text(text)
+
+    assert result.imported == 3
+    assert result.duplicates == 1
+    async with sessionmaker() as session:
+        usernames = [item.username for item in await session.scalars(select(Recipient).order_by(Recipient.username))]
+    assert usernames == ["alice", "bob", "carol"]

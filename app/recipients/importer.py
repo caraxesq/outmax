@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -69,6 +70,64 @@ class RecipientImporter:
 
     async def import_csv_bytes(self, data: bytes) -> ImportResult:
         return await self.import_csv_text(data.decode("utf-8-sig"))
+
+    async def import_usernames_text(self, text: str) -> ImportResult:
+        usernames = self.extract_usernames(text)
+        return await self.import_usernames(usernames)
+
+    async def import_table_bytes(self, data: bytes, file_name: str | None = None) -> ImportResult:
+        name = (file_name or "").lower()
+        if name.endswith(".xlsx"):
+            return await self.import_usernames(self._extract_xlsx_usernames(data))
+        try:
+            return await self.import_usernames_text(data.decode("utf-8-sig"))
+        except UnicodeDecodeError:
+            return await self.import_usernames_text(data.decode("cp1251", errors="ignore"))
+
+    async def import_usernames(self, usernames: list[str]) -> ImportResult:
+        imported = duplicates = invalid = 0
+        seen: set[str] = set()
+        async with self.sessionmaker() as session:
+            for username in usernames:
+                normalized = self._normalize_username(username)
+                if normalized is None:
+                    invalid += 1
+                    continue
+                if normalized in seen:
+                    duplicates += 1
+                    continue
+                seen.add(normalized)
+                exists = await session.scalar(select(Recipient).where(Recipient.username == normalized))
+                if exists:
+                    duplicates += 1
+                    continue
+                session.add(Recipient(username=normalized, metadata_json={"username": normalized}))
+                imported += 1
+            await session.commit()
+        return ImportResult(imported=imported, skipped=0, duplicates=duplicates, invalid=invalid)
+
+    @classmethod
+    def extract_usernames(cls, text: str) -> list[str]:
+        usernames: list[str] = []
+        for match in re.finditer(r"(?:https?://t\.me/|t\.me/|@)?([A-Za-z][A-Za-z0-9_]{2,31})", text):
+            candidate = match.group(1)
+            if candidate.lower() in {"http", "https", "user_id", "username", "name", "segment"}:
+                continue
+            usernames.append(candidate)
+        return usernames
+
+    def _extract_xlsx_usernames(self, data: bytes) -> list[str]:
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        usernames: list[str] = []
+        for sheet in workbook.worksheets:
+            for row in sheet.iter_rows(values_only=True):
+                for value in row:
+                    if value is not None:
+                        usernames.extend(self.extract_usernames(str(value)))
+        workbook.close()
+        return usernames
 
     @staticmethod
     def _parse_user_id(value: Any) -> int | None:

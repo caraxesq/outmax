@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.accounts.manager import AccountManager
 from app.config import Settings
 from app.db.models import Message, Recipient, utcnow
+from app.settings.service import SettingsService
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +29,13 @@ class MessageWorker:
         settings: Settings,
         sessionmaker: async_sessionmaker[AsyncSession],
         account_manager: AccountManager,
+        settings_service: SettingsService | None = None,
         sleep_func=asyncio.sleep,
     ):
         self.settings = settings
         self.sessionmaker = sessionmaker
         self.account_manager = account_manager
+        self.settings_service = settings_service or SettingsService(sessionmaker, settings)
         self.sleep_func = sleep_func
         self._running = False
 
@@ -78,8 +81,13 @@ class MessageWorker:
             await session.commit()
 
         try:
+            runtime_settings = await self.settings_service.get()
             await self.account_manager.send_message(account, peer, message.text)
-            await self.account_manager.mark_sent(account.id)
+            await self.account_manager.mark_sent(
+                account.id,
+                cooldown_after_messages=runtime_settings.cooldown_after_messages,
+                cooldown_seconds=runtime_settings.cooldown_seconds,
+            )
             async with self.sessionmaker() as session:
                 fresh = await session.get(Message, message.id)
                 if fresh:
@@ -87,8 +95,7 @@ class MessageWorker:
                     fresh.sent_at = utcnow()
                     fresh.last_error = None
                     await session.commit()
-            delay = random.randint(self.settings.min_send_delay, self.settings.max_send_delay)
-            await self.sleep_func(delay)
+            await self.sleep_func(runtime_settings.send_delay_seconds)
             return True
         except FloodWaitError as exc:
             seconds = int(getattr(exc, "seconds", 60) or 60)

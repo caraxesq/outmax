@@ -16,6 +16,7 @@ from app.messaging.queue import CampaignQueue
 from app.messaging.worker import MessageWorker
 from app.recipients.importer import RecipientImporter
 from app.replies.listener import ReplyListener
+from app.settings.service import SettingsService
 from app.templates.renderer import MessageRenderer
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ async def main() -> None:
     account_manager = AccountManager(settings, sessionmaker)
     await account_manager.scan_sessions()
     renderer = MessageRenderer(settings)
+    settings_service = SettingsService(sessionmaker, settings)
     campaign_queue = CampaignQueue(sessionmaker, renderer)
     runtime = BotRuntime(
         settings=settings,
@@ -48,6 +50,7 @@ async def main() -> None:
         recipient_importer=RecipientImporter(sessionmaker),
         campaign_queue=campaign_queue,
         login_manager=BotLoginManager(settings, sessionmaker),
+        settings_service=settings_service,
     )
     dispatcher.include_router(build_router(runtime))
 
@@ -56,7 +59,7 @@ async def main() -> None:
         for account, client in await account_manager.start_authorized_clients():
             reply_listener.attach(account.id, client)
 
-    worker = MessageWorker(settings, sessionmaker, account_manager)
+    worker = MessageWorker(settings, sessionmaker, account_manager, settings_service=settings_service)
     worker_task = asyncio.create_task(worker.start())
     try:
         logger.info("Outmax service started")

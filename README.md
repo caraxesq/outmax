@@ -48,12 +48,27 @@ The control bot uses a Russian button menu. Send `/start` once, then use the per
 
 - `Статус`
 - `Аккаунты`
-- `Загрузить CSV`
+- `Лиды`
 - `Шаблон`
 - `Запустить кампанию`
 - `Остановить кампании`
+- `Параметры`
 - `Добавить аккаунт`
 - `Помощь`
+
+`Аккаунты` supports two onboarding paths:
+
+- Upload a ready `.session` file directly to the bot.
+- Connect by phone/code when `ENABLE_BOT_LOGIN=true` and `API_ID`/`API_HASH` are configured.
+
+`Лиды` accepts usernames as plain text, `t.me` links, or files with usernames. Supported practical formats are CSV, TXT, TSV, and XLSX; other text-like tables are parsed as plain text.
+
+`Параметры` lets an admin adjust pacing from the bot:
+
+- messages per hour
+- delay between messages in minutes
+- cooldown after N messages
+- cooldown duration in minutes
 
 For `/upload_list`, send a CSV document after the command. CSV must include `user_id` or `username`; optional columns such as `name`, `niche`, `context`, and `segment` become template variables.
 

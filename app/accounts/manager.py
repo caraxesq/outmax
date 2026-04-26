@@ -117,14 +117,21 @@ class AccountManager:
         client = await self.get_client(account)
         await client.send_message(peer, text)
 
-    async def mark_sent(self, account_id: int) -> None:
+    async def mark_sent(
+        self,
+        account_id: int,
+        cooldown_after_messages: int | None = None,
+        cooldown_seconds: int | None = None,
+    ) -> None:
         async with self.sessionmaker() as session:
             account = await session.get(Account, account_id)
             if account:
                 account.sent_today += 1
                 account.last_sent_at = utcnow()
-                if self.settings.cooldown_after_messages and account.sent_today % self.settings.cooldown_after_messages == 0:
-                    account.cooldown_until = utcnow() + timedelta(seconds=self.settings.cooldown_seconds)
+                cooldown_after = cooldown_after_messages or self.settings.cooldown_after_messages
+                cooldown_for = cooldown_seconds if cooldown_seconds is not None else self.settings.cooldown_seconds
+                if cooldown_after and account.sent_today % cooldown_after == 0:
+                    account.cooldown_until = utcnow() + timedelta(seconds=cooldown_for)
                 await session.commit()
 
     async def mark_limited(self, account_id: int, seconds: int, reason: str) -> None:

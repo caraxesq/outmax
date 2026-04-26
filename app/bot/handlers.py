@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import html
 import logging
 from dataclasses import dataclass, field
 
@@ -16,21 +15,25 @@ from app.bot.keyboards import (
     BTN_ACCOUNTS,
     BTN_ADD_ACCOUNT,
     BTN_HELP,
+    BTN_LEADS,
+    BTN_SETTINGS,
     BTN_START_CAMPAIGN,
     BTN_STATUS,
     BTN_STOP_CAMPAIGN,
     BTN_TEMPLATE,
-    BTN_UPLOAD_LIST,
     HELP_TEXT,
     accounts_keyboard,
     campaign_start_keyboard,
+    leads_keyboard,
     main_menu_keyboard,
+    settings_keyboard,
     template_keyboard,
 )
 from app.config import Settings
 from app.db.models import Account, Campaign, Message, Reply
 from app.messaging.queue import CampaignQueue
 from app.recipients.importer import RecipientImporter
+from app.settings.service import SettingsService
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +50,7 @@ class BotRuntime:
     recipient_importer: RecipientImporter
     campaign_queue: CampaignQueue
     login_manager: BotLoginManager
+    settings_service: SettingsService
     current_template: str = ""
     user_states: dict[int, str] = field(default_factory=dict)
 
@@ -108,8 +112,7 @@ async def render_accounts(runtime: BotRuntime) -> tuple[str, object]:
     if not accounts:
         text = (
             "Аккаунты не найдены.\n\n"
-            "Положите готовые .session файлы в папку sessions или используйте кнопку "
-            "\"Добавить аккаунт\", когда будут заполнены API_ID и API_HASH."
+            "Выберите способ подключения: загрузить готовый .session файл или подключить аккаунт по коду."
         )
         return text, accounts_keyboard([])
 
@@ -124,6 +127,18 @@ async def render_accounts(runtime: BotRuntime) -> tuple[str, object]:
     return "\n\n".join(lines), accounts_keyboard(accounts)
 
 
+async def render_runtime_settings(runtime: BotRuntime) -> str:
+    current = await runtime.settings_service.get()
+    return (
+        "Параметры отправки\n\n"
+        f"Сообщений в час: {current.send_per_hour}\n"
+        f"Задержка между сообщениями: {current.delay_minutes} мин.\n"
+        f"Перерыв после сообщений: {current.cooldown_after_messages}\n"
+        f"Длина перерыва: {current.cooldown_minutes} мин.\n\n"
+        "Выберите параметр, который хотите изменить."
+    )
+
+
 async def start_campaign_for_segment(runtime: BotRuntime, segment: str | None) -> str:
     if not runtime.current_template:
         return "Сначала задайте шаблон через кнопку \"Шаблон\"."
@@ -133,6 +148,15 @@ async def start_campaign_for_segment(runtime: BotRuntime, segment: str | None) -
     return f"Кампания #{campaign.id} запущена.\nСегмент: {segment_text}\nВ очереди сообщений: {created}"
 
 
+def _settings_prompt(key: str) -> str | None:
+    return {
+        "send_per_hour": "Введите сколько сообщений отправлять в час. Например: 12",
+        "delay_minutes": "Введите задержку между сообщениями в минутах. Например: 5",
+        "cooldown_after_messages": "Введите после скольких сообщений делать перерыв. Например: 20",
+        "cooldown_minutes": "Введите длину перерыва в минутах. Например: 40",
+    }.get(key)
+
+
 def build_router(runtime: BotRuntime) -> Router:
     router = Router()
 
@@ -140,7 +164,7 @@ def build_router(runtime: BotRuntime) -> Router:
     async def start(message: BotMessage) -> None:
         if not await require_admin(message, runtime.settings):
             return
-        await send_main_menu(message, "Готово. Управление теперь через кнопки ниже.")
+        await send_main_menu(message, "Готово. Управление через кнопки ниже.")
 
     @router.message(F.text == BTN_HELP)
     async def help_button(message: BotMessage) -> None:
@@ -184,6 +208,31 @@ def build_router(runtime: BotRuntime) -> Router:
             logger.exception("Accounts refresh failed")
             await callback.answer("Не получилось обновить список", show_alert=True)
 
+    @router.callback_query(F.data == "accounts:upload_session")
+    async def accounts_upload_session(callback: CallbackQuery) -> None:
+        if not await require_admin_callback(callback, runtime.settings):
+            return
+        runtime.user_states[callback.from_user.id] = "awaiting_session"
+        if callback.message:
+            await callback.message.answer(
+                "Отправьте .session файл документом. Я сохраню его в sessions и обновлю список аккаунтов.",
+                reply_markup=main_menu_keyboard(),
+            )
+        await callback.answer()
+
+    @router.callback_query(F.data == "accounts:code_login")
+    async def accounts_code_login(callback: CallbackQuery) -> None:
+        if not await require_admin_callback(callback, runtime.settings):
+            return
+        try:
+            reply = await runtime.login_manager.start(callback.from_user.id)
+            if callback.message:
+                await callback.message.answer(reply, reply_markup=main_menu_keyboard())
+            await callback.answer()
+        except Exception:
+            logger.exception("Code login start failed")
+            await callback.answer("Не получилось начать подключение по коду", show_alert=True)
+
     @router.callback_query(F.data.startswith("account:"))
     async def account_toggle(callback: CallbackQuery) -> None:
         if not await require_admin_callback(callback, runtime.settings):
@@ -191,8 +240,7 @@ def build_router(runtime: BotRuntime) -> Router:
         try:
             _, action, raw_account_id = callback.data.split(":")
             account_id = int(raw_account_id)
-            enabled = action == "enable"
-            updated = await runtime.account_manager.set_enabled(account_id, enabled)
+            updated = await runtime.account_manager.set_enabled(account_id, action == "enable")
             if not updated:
                 await callback.answer("Аккаунт не найден", show_alert=True)
                 return
@@ -209,25 +257,42 @@ def build_router(runtime: BotRuntime) -> Router:
     async def add_account(message: BotMessage) -> None:
         if not await require_admin(message, runtime.settings):
             return
-        try:
-            reply = await runtime.login_manager.start(_admin_id(message))
-            await message.answer(reply, reply_markup=main_menu_keyboard())
-        except Exception:
-            logger.exception("Add account button failed")
-            await message.answer("Не получилось начать подключение аккаунта. Ошибка записана в лог.", reply_markup=main_menu_keyboard())
+        text, keyboard = await render_accounts(runtime)
+        await message.answer(text, reply_markup=keyboard)
 
     @router.message(Command("upload_list"))
-    @router.message(F.text == BTN_UPLOAD_LIST)
-    async def upload_list(message: BotMessage) -> None:
+    @router.message(F.text == BTN_LEADS)
+    async def leads(message: BotMessage) -> None:
         if not await require_admin(message, runtime.settings):
             return
-        runtime.user_states[_admin_id(message)] = "awaiting_csv"
         await message.answer(
-            "Отправьте CSV-файл документом.\n\n"
-            "Обязательное поле: user_id или username.\n"
-            "Дополнительные колонки станут переменными шаблона.",
-            reply_markup=main_menu_keyboard(),
+            "Лиды\n\nМожно отправить username текстом или загрузить таблицу/файл с username.",
+            reply_markup=leads_keyboard(),
         )
+
+    @router.callback_query(F.data == "leads:text")
+    async def leads_text(callback: CallbackQuery) -> None:
+        if not await require_admin_callback(callback, runtime.settings):
+            return
+        runtime.user_states[callback.from_user.id] = "awaiting_leads_text"
+        if callback.message:
+            await callback.message.answer(
+                "Отправьте username одним сообщением. Можно несколько строк, через запятую или ссылки t.me.",
+                reply_markup=main_menu_keyboard(),
+            )
+        await callback.answer()
+
+    @router.callback_query(F.data == "leads:file")
+    async def leads_file(callback: CallbackQuery) -> None:
+        if not await require_admin_callback(callback, runtime.settings):
+            return
+        runtime.user_states[callback.from_user.id] = "awaiting_leads_file"
+        if callback.message:
+            await callback.message.answer(
+                "Отправьте файл с username. Подойдут CSV, TXT, TSV, XLSX и другие текстовые таблицы.",
+                reply_markup=main_menu_keyboard(),
+            )
+        await callback.answer()
 
     @router.message(F.document)
     async def receive_document(message: BotMessage, bot: Bot) -> None:
@@ -235,28 +300,42 @@ def build_router(runtime: BotRuntime) -> Router:
             return
         try:
             if not message.document:
-                await message.answer("Не вижу файл. Отправьте CSV документом.", reply_markup=main_menu_keyboard())
+                await message.answer("Не вижу файл. Отправьте документом.", reply_markup=main_menu_keyboard())
                 return
-            file_name = message.document.file_name or ""
-            if file_name and not file_name.lower().endswith(".csv"):
-                await message.answer("Нужен CSV-файл. Попробуйте отправить файл с расширением .csv.", reply_markup=main_menu_keyboard())
-                return
+            file_name = message.document.file_name or "upload.bin"
             file = await bot.get_file(message.document.file_id)
             data = await bot.download_file(file.file_path)
-            result = await runtime.recipient_importer.import_csv_bytes(data.read())
+            payload = data.read()
+            state = runtime.user_states.get(_admin_id(message))
+
+            if state == "awaiting_session" or file_name.lower().endswith(".session"):
+                if not file_name.lower().endswith(".session"):
+                    await message.answer("Нужен файл с расширением .session.", reply_markup=main_menu_keyboard())
+                    return
+                runtime.settings.sessions_dir.mkdir(parents=True, exist_ok=True)
+                safe_name = "".join(ch for ch in file_name if ch.isalnum() or ch in "._-")
+                target = runtime.settings.sessions_dir / safe_name
+                target.write_bytes(payload)
+                created = await runtime.account_manager.scan_sessions()
+                runtime.user_states.pop(_admin_id(message), None)
+                await message.answer(
+                    f"Session-файл загружен: {safe_name}\nНовых аккаунтов зарегистрировано: {created}",
+                    reply_markup=main_menu_keyboard(),
+                )
+                return
+
+            result = await runtime.recipient_importer.import_table_bytes(payload, file_name)
             runtime.user_states.pop(_admin_id(message), None)
             await message.answer(
-                "Импорт завершён.\n"
+                "Лиды загружены.\n"
                 f"Добавлено: {result.imported}\n"
                 f"Дубликатов: {result.duplicates}\n"
                 f"Некорректных строк: {result.invalid}",
                 reply_markup=main_menu_keyboard(),
             )
-        except UnicodeDecodeError:
-            await message.answer("Файл не похож на UTF-8 CSV. Сохраните таблицу как CSV UTF-8 и отправьте снова.", reply_markup=main_menu_keyboard())
         except Exception:
-            logger.exception("CSV import failed")
-            await message.answer("Не получилось импортировать CSV. Ошибка записана в лог.", reply_markup=main_menu_keyboard())
+            logger.exception("Document handling failed")
+            await message.answer("Не получилось обработать файл. Ошибка записана в лог.", reply_markup=main_menu_keyboard())
 
     @router.message(Command("set_template"))
     @router.message(F.text == BTN_TEMPLATE)
@@ -327,6 +406,26 @@ def build_router(runtime: BotRuntime) -> Router:
             logger.exception("Stop campaign failed")
             await message.answer("Не получилось остановить кампании. Ошибка записана в лог.", reply_markup=main_menu_keyboard())
 
+    @router.message(F.text == BTN_SETTINGS)
+    async def settings_button(message: BotMessage) -> None:
+        if not await require_admin(message, runtime.settings):
+            return
+        await message.answer(await render_runtime_settings(runtime), reply_markup=settings_keyboard())
+
+    @router.callback_query(F.data.startswith("settings:"))
+    async def settings_edit(callback: CallbackQuery) -> None:
+        if not await require_admin_callback(callback, runtime.settings):
+            return
+        key = callback.data.split(":", 1)[1]
+        prompt = _settings_prompt(key)
+        if not prompt:
+            await callback.answer("Неизвестный параметр", show_alert=True)
+            return
+        runtime.user_states[callback.from_user.id] = f"awaiting_setting:{key}"
+        if callback.message:
+            await callback.message.answer(prompt, reply_markup=main_menu_keyboard())
+        await callback.answer()
+
     @router.callback_query(F.data == "state:cancel")
     async def cancel_state(callback: CallbackQuery) -> None:
         if not await require_admin_callback(callback, runtime.settings):
@@ -367,8 +466,39 @@ def build_router(runtime: BotRuntime) -> Router:
                 await message.answer(await start_campaign_for_segment(runtime, text), reply_markup=main_menu_keyboard())
                 return
 
-            if state == "awaiting_csv":
-                await message.answer("Сейчас я жду CSV-файл документом. Текст не импортируется.", reply_markup=main_menu_keyboard())
+            if state == "awaiting_leads_text":
+                result = await runtime.recipient_importer.import_usernames_text(text)
+                runtime.user_states.pop(admin_id, None)
+                await message.answer(
+                    "Лиды добавлены.\n"
+                    f"Добавлено: {result.imported}\n"
+                    f"Дубликатов: {result.duplicates}\n"
+                    f"Некорректных строк: {result.invalid}",
+                    reply_markup=main_menu_keyboard(),
+                )
+                return
+
+            if state == "awaiting_leads_file":
+                await message.answer("Сейчас я жду файл с username. Отправьте его документом.", reply_markup=main_menu_keyboard())
+                return
+
+            if state == "awaiting_session":
+                await message.answer("Сейчас я жду .session файл документом.", reply_markup=main_menu_keyboard())
+                return
+
+            if state and state.startswith("awaiting_setting:"):
+                key = state.split(":", 1)[1]
+                try:
+                    value = int(text)
+                except ValueError:
+                    await message.answer("Введите целое число.", reply_markup=main_menu_keyboard())
+                    return
+                if value < 1:
+                    await message.answer("Число должно быть больше нуля.", reply_markup=main_menu_keyboard())
+                    return
+                await runtime.settings_service.update(**{key: value})
+                runtime.user_states.pop(admin_id, None)
+                await message.answer(await render_runtime_settings(runtime), reply_markup=settings_keyboard())
                 return
 
             await send_main_menu(message, "Я не распознал действие. Используйте кнопки ниже.")
