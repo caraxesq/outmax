@@ -51,10 +51,10 @@ class ReplyListener:
     async def notify_admins(self, account_id: int, sender_id: int | None, username: str | None, text: str) -> None:
         link = f"https://t.me/{username}" if username else (f"tg://user?id={sender_id}" if sender_id else "unknown sender")
         body = (
-            "<b>New Telegram reply</b>\n"
-            f"Account ID: <code>{account_id}</code>\n"
-            f"Sender: <a href=\"{html.escape(link)}\">{html.escape(username or str(sender_id or 'unknown'))}</a>\n"
-            f"Text: {html.escape(text[:3500])}"
+            "<b>Новый ответ в Telegram</b>\n"
+            f"Аккаунт ID: <code>{account_id}</code>\n"
+            f"Отправитель: <a href=\"{html.escape(link)}\">{html.escape(username or str(sender_id or 'неизвестно'))}</a>\n"
+            f"Текст: {html.escape(text[:3500])}"
         )
         for admin_id in self.settings.admin_id_set:
             try:

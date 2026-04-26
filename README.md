@@ -42,16 +42,18 @@ This creates a Telethon session under `sessions/`. You can also place existing `
 
 The control bot supports `/add_account` if `ENABLE_BOT_LOGIN=true`. This is admin-only and does not log login codes or 2FA passwords.
 
-## Bot Commands
+## Bot Controls
 
-- `/start`
-- `/accounts`
-- `/add_account`
-- `/upload_list`
-- `/set_template`
-- `/start_campaign`
-- `/stop_campaign`
-- `/status`
+The control bot uses a Russian button menu. Send `/start` once, then use the persistent buttons:
+
+- `Статус`
+- `Аккаунты`
+- `Загрузить CSV`
+- `Шаблон`
+- `Запустить кампанию`
+- `Остановить кампании`
+- `Добавить аккаунт`
+- `Помощь`
 
 For `/upload_list`, send a CSV document after the command. CSV must include `user_id` or `username`; optional columns such as `name`, `niche`, `context`, and `segment` become template variables.
 

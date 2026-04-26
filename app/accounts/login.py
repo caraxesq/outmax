@@ -74,11 +74,11 @@ class BotLoginManager:
 
     async def start(self, admin_id: int) -> str:
         if not self.enabled_for(admin_id):
-            return "Bot login disabled. Set ENABLE_BOT_LOGIN=true and use an admin account."
+            return "Вход через бота отключён. Установите ENABLE_BOT_LOGIN=true и используйте аккаунт администратора."
         if not self.settings.telegram_api_ready:
-            return "Telegram API credentials are missing. Set API_ID and API_HASH before adding user accounts."
+            return "Не заполнены API_ID и API_HASH. Без них нельзя добавить Telegram user-аккаунт."
         self.states[admin_id] = BotLoginState(session_name="")
-        return "Send the phone number for the Telegram user account."
+        return "Отправьте номер телефона Telegram user-аккаунта."
 
     async def handle_input(self, admin_id: int, text: str) -> str | None:
         state = self.states.get(admin_id)
@@ -98,7 +98,7 @@ class BotLoginManager:
             state.code_hash = sent.phone_code_hash
             state.client = client
             state.stage = "code"
-            return "Code sent. Send the login code."
+            return "Код отправлен. Отправьте код входа."
 
         if state.stage == "code":
             assert state.client is not None
@@ -106,7 +106,7 @@ class BotLoginManager:
                 await state.client.sign_in(state.phone, text.strip(), phone_code_hash=state.code_hash)
             except SessionPasswordNeededError:
                 state.stage = "password"
-                return "Two-factor password is required. Send the 2FA password."
+                return "Нужен пароль двухфакторной защиты. Отправьте 2FA-пароль."
             return await self._finish(admin_id, state)
 
         if state.stage == "password":
@@ -122,7 +122,7 @@ class BotLoginManager:
         await register_session(self.sessionmaker, self.settings, state.session_name, state.phone, username)
         await state.client.disconnect()  # type: ignore[union-attr]
         self.states.pop(admin_id, None)
-        return f"Account added: {state.session_name}"
+        return f"Аккаунт добавлен: {state.session_name}"
 
 
 async def cli_login() -> None:
