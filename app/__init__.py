@@ -1,0 +1,1 @@
+"""Outmax Telegram automation package."""
